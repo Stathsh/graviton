@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Graviton — Black Hole Simulator</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; color: #fff; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; overflow: hidden; }
+    canvas { display: block; width: 100vw; height: 100vh; }
+
+    #overlay { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
+
+    #title {
+      position: absolute; top: 24px; left: 32px;
+      font-size: 28px; font-weight: 300; letter-spacing: 6px;
+      text-transform: uppercase; opacity: 0.85;
+    }
+    #title span { font-weight: 700; }
+    #subtitle { font-size: 10px; letter-spacing: 3px; opacity: 0.4; margin-top: 4px; }
+    #tech-stack {
+      font-size: 9px; letter-spacing: 2px; opacity: 0.3; margin-top: 6px;
+      font-family: monospace;
+    }
+
+    #stats {
+      position: absolute; top: 24px; right: 32px;
+      font-size: 12px; opacity: 0.4; text-align: right; font-family: monospace;
+      line-height: 1.6;
+    }
+
+    #physics-info {
+      position: absolute; top: 80px; right: 32px;
+      font-size: 11px; opacity: 0.3; text-align: right; font-family: monospace;
+    }
+
+    #controls {
+      position: absolute; bottom: 32px; left: 32px;
+      pointer-events: all;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 20px 24px;
+      min-width: 300px;
+    }
+    #controls h3 {
+      font-size: 10px; letter-spacing: 2px;
+      text-transform: uppercase; opacity: 0.4; margin-bottom: 16px;
+    }
+    .row {
+      display: flex; align-items: center;
+      justify-content: space-between; margin-bottom: 10px;
+    }
+    .row label { font-size: 12px; opacity: 0.7; min-width: 110px; }
+    .row input[type="range"] {
+      width: 120px; accent-color: #ff6a00;
+      height: 3px; cursor: pointer;
+    }
+    .row .val { font-size: 11px; opacity: 0.4; min-width: 45px; text-align: right; font-family: monospace; }
+
+    select {
+      background: rgba(255,255,255,0.08); color: #fff;
+      border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 4px; padding: 3px 8px; font-size: 11px;
+      cursor: pointer;
+    }
+
+    #no-webgpu {
+      position: fixed; inset: 0; display: none;
+      align-items: center; justify-content: center;
+      background: #000; z-index: 100; flex-direction: column; gap: 16px;
+    }
+    #no-webgpu h1 { font-size: 24px; font-weight: 300; }
+    #no-webgpu p { opacity: 0.5; font-size: 14px; max-width: 400px; text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="no-webgpu">
+    <h1>WebGPU Required</h1>
+    <p>Graviton requires WebGPU for GPU compute shaders. Use Chrome 113+, Edge 113+, or Firefox 141+.</p>
+  </div>
+
+  <canvas id="canvas"></canvas>
+
+  <div id="overlay">
+    <div id="title">
+      <span>Graviton</span>
+      <div id="subtitle">Black Hole Astrophysics Simulator</div>
+      <div id="tech-stack">Zig/WASM + WebGPU Compute + TypeScript</div>
+    </div>
+
+    <div id="stats">
+      <div id="fps">-- FPS</div>
+      <div id="particles">-- particles</div>
+    </div>
+
+    <div id="physics-info"></div>
+
+    <div id="controls">
+      <h3>Kerr Black Hole Parameters</h3>
+      <div class="row">
+        <label>Mass (M)</label>
+        <input type="range" id="mass" min="0.5" max="10" step="0.1" value="3.0">
+        <span class="val" id="massVal">3.0</span>
+      </div>
+      <div class="row">
+        <label>Spin (a/M)</label>
+        <input type="range" id="spin" min="0" max="0.998" step="0.01" value="0.5">
+        <span class="val" id="spinVal">0.50</span>
+      </div>
+      <div class="row">
+        <label>Accretion Rate</label>
+        <input type="range" id="accretion" min="0.1" max="3" step="0.1" value="1.0">
+        <span class="val" id="accretionVal">1.0</span>
+      </div>
+      <div class="row">
+        <label>Disk Temp (K)</label>
+        <input type="range" id="temperature" min="1000" max="30000" step="500" value="6000">
+        <span class="val" id="temperatureVal">6000K</span>
+      </div>
+      <div class="row">
+        <label>Camera Distance</label>
+        <input type="range" id="camDist" min="8" max="60" step="0.5" value="20">
+        <span class="val" id="camDistVal">20</span>
+      </div>
+      <div class="row">
+        <label>Viewing Angle</label>
+        <input type="range" id="camAngle" min="5" max="85" step="1" value="30">
+        <span class="val" id="camAngleVal">30&deg;</span>
+      </div>
+      <div class="row">
+        <label>Color Scheme</label>
+        <select id="colorScheme">
+          <option value="0">Blackbody</option>
+          <option value="1">Plasma</option>
+          <option value="2">Cool Blue</option>
+          <option value="3">Interstellar</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
