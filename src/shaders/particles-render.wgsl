@@ -66,7 +66,27 @@ fn vs_main(@builtin(vertex_index) vid: u32, @builtin(instance_index) iid: u32) -
   var color: vec3<f32>;
   var glow_v: f32;
 
-  if (ptype < 0.5) {
+  if (ptype > 1.5) {
+    // --- Star (tidal disruption) ---
+    let r = p.meta.x;
+    let stretch = p.meta.y;
+    let grav_rs = p.meta.z;
+
+    // Size: stretch along velocity direction (spaghettification)
+    size = 0.03 + min(stretch * 0.01, 0.08);
+    glow_v = smoothstep(isco * 8.0, isco, r);
+
+    // Color: star starts yellow-white, heats to hot orange/white near BH
+    let bb = blackbody(p.vel.w);
+    // Boost warm colors for stellar look
+    color = bb * vec3(1.1, 0.95, 0.85);
+    // Tidal heating glow — gets brighter and whiter as it heats
+    let heat_glow = smoothstep(6000.0, 40000.0, p.vel.w);
+    color = mix(color, vec3(2.0, 1.5, 1.2), heat_glow * 0.6);
+    // Inner region extreme brightness
+    color *= (1.0 + glow_v * 3.0);
+    color *= grav_rs; // gravitational dimming
+  } else if (ptype < 0.5) {
     let r = p.meta.x;
     let ig = smoothstep(isco * 4.0, isco * 0.8, r);
     // Tiny particles — denser look
