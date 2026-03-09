@@ -9,6 +9,10 @@ struct Params {
   particle_count: u32,
   isco: f32,
   photon_r: f32,
+  star_time: f32,
+  star_start: f32,
+  star_count: f32,
+  _pad: f32,
 }
 
 struct Particle {
@@ -65,7 +69,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   let seed = bitcast<u32>(params.time * 1000.0) + idx;
 
   let r = length(p.pos.xyz);
-  let dead = r < r_h * 0.8 || r > 120.0 || p.pos.w > 60.0 || r != r;
+  let is_star = p.extra.x > 1.5;
+  let dead = (r < r_h * 0.8 || r > 120.0 || p.pos.w > 60.0 || r != r) && !is_star;
 
   // 12% jet particles
   let is_jet = idx >= params.particle_count - params.particle_count / 8u;
@@ -126,7 +131,49 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     p.meta = vec4(0.0, 1.0, 1.0, 0.0);
   }
 
-  if (p.extra.x < 0.5) {
+  if (is_star) {
+    // --- Star (tidal disruption) ---
+    let star_dead = r < r_h * 0.8 || r > 200.0 || p.pos.w > 120.0 || r != r;
+    if (star_dead) {
+      // Hide dead star particles far away with zero alpha
+      p.meta = vec4(r, 1.0, 1.0, 0.0);
+      p.pos = vec4(9999.0, 9999.0, 9999.0, p.pos.w);
+      particles[idx] = p;
+      return;
+    }
+
+    // Pure gravitational physics — Verlet integration
+    let acc1 = kerr_accel(p.pos.xyz);
+    let np = p.pos.xyz + p.vel.xyz * dt + 0.5 * acc1 * dt * dt;
+    let acc2 = kerr_accel(np);
+    let nv = p.vel.xyz + 0.5 * (acc1 + acc2) * dt;
+
+    p.pos = vec4(np, p.pos.w + dt);
+    p.vel = vec4(nv, p.vel.w);
+
+    let nr = length(np);
+
+    // Tidal heating: temperature increases as particle approaches BH
+    let tidal_strength = pow(M / max(nr, r_h), 3.0);
+    let heat_rate = tidal_strength * 800.0;
+    p.vel.w = min(p.vel.w + heat_rate * dt, 80000.0);
+
+    // Spaghettification: stretch factor based on tidal gradient
+    let stretch = 1.0 + tidal_strength * 2.0;
+
+    // Gravitational redshift
+    let grav_redshift = sqrt(max(1.0 - rs / nr, 0.01));
+
+    // Alpha: fade very old or very far particles
+    let age_fade = smoothstep(120.0, 80.0, p.pos.w);
+    let dist_fade = smoothstep(180.0, 100.0, nr);
+    let inner_bright = smoothstep(params.isco * 8.0, params.isco, nr);
+    let alpha = age_fade * dist_fade * (0.4 + inner_bright * 0.6);
+
+    // meta: x=r, y=stretch, z=grav_redshift, w=alpha
+    p.meta = vec4(nr, stretch, grav_redshift, alpha);
+    p.extra.y = sqrt(max(1.0 - rs / nr, 0.001)); // time dilation
+  } else if (p.extra.x < 0.5) {
     // --- Disk ---
     let acc1 = kerr_accel(p.pos.xyz);
     let np = p.pos.xyz + p.vel.xyz * dt + 0.5 * acc1 * dt * dt;
