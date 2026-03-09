@@ -1,5 +1,4 @@
-// WebGPU Compute — Accretion disk + relativistic jet particle physics
-// Kerr metric with frame-dragging, time dilation, volumetric disk, polar jets
+// Particle physics — dense accretion disk with spiral arms + dramatic jets
 
 struct Params {
   mass: f32,
@@ -12,48 +11,42 @@ struct Params {
   photon_r: f32,
 }
 
-// Particle types: 0 = disk, 1 = jet
 struct Particle {
-  pos: vec4<f32>,    // xyz position, w = age
-  vel: vec4<f32>,    // xyz velocity, w = temperature
-  meta: vec4<f32>,   // x = orbital_r, y = redshift, z = doppler, w = alpha
-  extra: vec4<f32>,  // x = type (0=disk,1=jet), y = time_dilation, z = initial_r, w = turbulence
+  pos: vec4<f32>,    // xyz, w=age
+  vel: vec4<f32>,    // xyz, w=temperature
+  meta: vec4<f32>,   // x=r, y=redshift, z=doppler, w=alpha
+  extra: vec4<f32>,  // x=type(0=disk,1=jet), y=time_dilation, z=spiral_phase, w=turbulence
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var<storage, read_write> particles: array<Particle>;
 
-fn pcg_hash(input: u32) -> u32 {
-  var state = input * 747796405u + 2891336453u;
-  var word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-  return (word >> 22u) ^ word;
+fn pcg(n: u32) -> u32 {
+  var s = n * 747796405u + 2891336453u;
+  var w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u;
+  return (w >> 22u) ^ w;
 }
 
 fn rand(id: u32, salt: u32) -> f32 {
-  return f32(pcg_hash(id * 1099087573u + salt)) / 4294967295.0;
+  return f32(pcg(id * 1099087573u + salt)) / 4294967295.0;
 }
 
 fn kerr_accel(pos: vec3<f32>) -> vec3<f32> {
   let r = length(pos);
   let M = params.mass;
-  let a_spin = params.spin;
+  let a = params.spin;
   let rs = 2.0 * M;
-  let r_h = M + sqrt(max(M * M - a_spin * a_spin, 0.0));
-
-  if (r < r_h * 0.8) { return vec3<f32>(0.0); }
+  let r_h = M + sqrt(max(M * M - a * a, 0.0));
+  if (r < r_h * 0.7) { return vec3(0.0); }
 
   let r_hat = pos / r;
-  let pn_factor = 1.0 + 1.5 * rs / r + 2.0 * rs * rs / (r * r);
-  var acc = -M / (r * r) * r_hat * pn_factor;
+  let pn = 1.0 + 1.5 * rs / r + 2.0 * rs * rs / (r * r);
+  var acc = -M / (r * r) * r_hat * pn;
 
-  let omega_fd = 2.0 * M * a_spin / (r * r * r);
-  let drag_dir = vec3<f32>(-pos.z, 0.0, pos.x);
-  acc += omega_fd * normalize(drag_dir) * length(pos.xz);
-
-  if (r < params.isco * 1.2 && r > r_h) {
-    let repulsion = 0.5 * rs / (r * r * r);
-    acc += r_hat * repulsion;
-  }
+  // Frame-dragging
+  let omega = 2.0 * M * a / (r * r * r);
+  let drag = vec3(-pos.z, 0.0, pos.x);
+  acc += omega * normalize(drag) * length(pos.xz);
 
   return acc;
 }
@@ -66,180 +59,142 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
   var p = particles[idx];
   let dt = params.dt;
   let M = params.mass;
-  let a_spin = params.spin;
+  let a = params.spin;
   let rs = 2.0 * M;
-  let r_h = M + sqrt(max(M * M - a_spin * a_spin, 0.0));
+  let r_h = M + sqrt(max(M * M - a * a, 0.0));
   let seed = bitcast<u32>(params.time * 1000.0) + idx;
 
   let r = length(p.pos.xyz);
-  let needs_respawn = r < r_h * 0.9 || r > 100.0 || p.pos.w > 50.0 || r != r;
+  let dead = r < r_h * 0.8 || r > 120.0 || p.pos.w > 60.0 || r != r;
 
-  // 10% of particles are jet particles
-  let is_jet = idx >= params.particle_count * 9u / 10u;
+  // 12% jet particles
+  let is_jet = idx >= params.particle_count - params.particle_count / 8u;
 
-  if (needs_respawn) {
+  if (dead) {
     if (is_jet) {
-      // --- Jet particle spawn ---
-      let jet_r = r_h * 1.2 + rand(idx, seed) * r_h * 0.5;
-      let angle = rand(idx, seed + 1u) * 6.283185;
-      let spread = rand(idx, seed + 2u) * 0.4;
-      // Choose top or bottom jet
-      let pole_sign = select(-1.0, 1.0, rand(idx, seed + 3u) > 0.5);
+      let pole = select(-1.0, 1.0, rand(idx, seed + 99u) > 0.5);
+      let ang = rand(idx, seed) * 6.283;
+      let spread = rand(idx, seed + 1u) * 0.25;
+      let base_r = r_h * (1.0 + rand(idx, seed + 2u) * 0.4);
 
-      p.pos = vec4<f32>(
-        cos(angle) * spread * jet_r * 0.3,
-        pole_sign * jet_r * 0.5,
-        sin(angle) * spread * jet_r * 0.3,
+      p.pos = vec4(
+        cos(ang) * spread * base_r * 0.25,
+        pole * base_r * 0.3,
+        sin(ang) * spread * base_r * 0.25,
         0.0,
       );
 
-      // Jet velocity — primarily vertical, very fast
-      let jet_speed = 0.4 + rand(idx, seed + 4u) * 0.5; // up to ~0.9c
-      let wobble_x = (rand(idx, seed + 5u) - 0.5) * 0.08;
-      let wobble_z = (rand(idx, seed + 6u) - 0.5) * 0.08;
-
-      p.vel = vec4<f32>(
-        wobble_x * jet_speed,
-        pole_sign * jet_speed,
-        wobble_z * jet_speed,
-        50000.0 + rand(idx, seed + 7u) * 100000.0, // jets are extremely hot
+      let speed = 0.35 + rand(idx, seed + 3u) * 0.55;
+      p.vel = vec4(
+        (rand(idx, seed + 4u) - 0.5) * 0.06,
+        pole * speed,
+        (rand(idx, seed + 5u) - 0.5) * 0.06,
+        40000.0 + rand(idx, seed + 6u) * 120000.0,
       );
-
-      p.extra = vec4<f32>(1.0, 1.0, jet_r, rand(idx, seed + 8u));
+      p.extra = vec4(1.0, 1.0, rand(idx, seed + 7u) * 6.283, 0.0);
     } else {
-      // --- Disk particle spawn (volumetric) ---
-      let angle = rand(idx, seed) * 6.283185;
-      let radius = params.isco + rand(idx, seed + 1u) * M * 14.0 * params.accretion_rate;
+      // Dense disk with spiral structure
+      let ang = rand(idx, seed) * 6.283;
 
-      // Volumetric: thicker disk further out, thinner near ISCO
-      let disk_scale = 0.08 + 0.25 * sqrt(radius / (params.isco * 4.0));
-      let height = (rand(idx, seed + 2u) - 0.5) * disk_scale * radius;
+      // Bias radius towards ISCO (denser inner disk)
+      let u_r = rand(idx, seed + 1u);
+      let radius = params.isco * (1.0 + pow(u_r, 0.5) * 8.0 * params.accretion_rate);
 
-      // Turbulence factor per particle
-      let turbulence = 0.5 + rand(idx, seed + 9u) * 0.5;
+      // Spiral arm offset
+      let spiral_phase = ang + radius * 0.15 - params.time * 0.2;
 
-      p.pos = vec4<f32>(
-        cos(angle) * radius,
-        height,
-        sin(angle) * radius,
-        0.0,
+      // Volumetric height — thinner near ISCO, thicker further out
+      let scale_h = 0.01 + 0.06 * pow(radius / (params.isco * 5.0), 1.5);
+      let h = (rand(idx, seed + 2u) - 0.5) * scale_h * radius;
+      let turb = 0.3 + rand(idx, seed + 8u) * 0.7;
+
+      p.pos = vec4(cos(ang) * radius, h, sin(ang) * radius, 0.0);
+
+      let v_k = sqrt(M / radius);
+      let kerr_boost = 1.0 + a * sqrt(M) / (radius * sqrt(radius));
+      let tangent = vec3(-sin(ang), 0.0, cos(ang));
+      let drift = normalize(p.pos.xyz) * (-0.004 * params.accretion_rate);
+      let turb_v = vec3(
+        (rand(idx, seed + 9u) - 0.5) * 0.015 * turb,
+        (rand(idx, seed + 10u) - 0.5) * 0.005 * turb,
+        (rand(idx, seed + 11u) - 0.5) * 0.015 * turb,
       );
 
-      let v_kepler = sqrt(M / radius);
-      let kerr_correction = 1.0 + a_spin * sqrt(M) / (radius * sqrt(radius));
-      let tangent = vec3<f32>(-sin(angle), 0.0, cos(angle));
-      let v_orbit = v_kepler * kerr_correction;
-      let radial = normalize(p.pos.xyz) * (-0.003 * params.accretion_rate);
-
-      // Add turbulent velocity component
-      let turb_vel = vec3<f32>(
-        (rand(idx, seed + 10u) - 0.5) * 0.02 * turbulence,
-        (rand(idx, seed + 11u) - 0.5) * 0.01 * turbulence,
-        (rand(idx, seed + 12u) - 0.5) * 0.02 * turbulence,
-      );
-
-      p.vel = vec4<f32>(
-        tangent * v_orbit + radial + turb_vel,
-        3000.0 + rand(idx, seed + 3u) * 17000.0,
-      );
-
-      p.extra = vec4<f32>(0.0, 1.0, radius, turbulence);
+      p.vel = vec4(tangent * v_k * kerr_boost + drift + turb_v, 3000.0 + rand(idx, seed + 3u) * 17000.0);
+      p.extra = vec4(0.0, 1.0, spiral_phase, turb);
     }
-    p.meta = vec4<f32>(0.0, 1.0, 1.0, 0.0);
+    p.meta = vec4(0.0, 1.0, 1.0, 0.0);
   }
 
-  let particle_type = p.extra.x;
-
-  if (particle_type < 0.5) {
-    // --- Disk particle physics ---
+  if (p.extra.x < 0.5) {
+    // --- Disk ---
     let acc1 = kerr_accel(p.pos.xyz);
-    let new_pos = p.pos.xyz + p.vel.xyz * dt + 0.5 * acc1 * dt * dt;
-    let acc2 = kerr_accel(new_pos);
-    let new_vel = p.vel.xyz + 0.5 * (acc1 + acc2) * dt;
+    let np = p.pos.xyz + p.vel.xyz * dt + 0.5 * acc1 * dt * dt;
+    let acc2 = kerr_accel(np);
+    let nv = p.vel.xyz + 0.5 * (acc1 + acc2) * dt;
 
-    p.pos = vec4<f32>(new_pos, p.pos.w + dt);
-    p.vel = vec4<f32>(new_vel, p.vel.w);
+    p.pos = vec4(np, p.pos.w + dt);
+    p.vel = vec4(nv, p.vel.w);
 
-    let new_r = length(new_pos);
+    let nr = length(np);
+    let redshift = 1.0 / sqrt(max(1.0 - rs / nr, 0.01));
+    let rv = dot(normalize(np), nv);
+    let doppler = sqrt(max((1.0 - rv) / (1.0 + rv + 0.001), 0.01));
+    let td = sqrt(max(1.0 - rs / nr, 0.001));
 
-    // Gravitational redshift
-    let redshift = 1.0 / sqrt(max(1.0 - rs / new_r, 0.01));
+    // Temperature: hotter near ISCO
+    let t_boost = pow(params.isco / max(nr, params.isco), 0.75);
+    p.vel.w = mix(p.vel.w, p.vel.w * t_boost, 0.015);
 
-    // Doppler
-    let radial_v = dot(normalize(new_pos), new_vel);
-    let doppler = sqrt(max((1.0 - radial_v) / (1.0 + radial_v + 0.001), 0.01));
+    // Spiral arm modulation
+    let phi = atan2(np.z, np.x);
+    let spiral = sin(phi * 3.0 - nr * 0.2 + p.extra.z) * 0.3 + 0.7;
+    let spiral2 = sin(phi * 7.0 + nr * 0.4 - params.time * 0.3) * 0.15 + 0.85;
 
-    // Temperature evolution — hotter near ISCO
-    let temp_boost = pow(params.isco / max(new_r, params.isco), 0.75);
-    p.vel.w = mix(p.vel.w, p.vel.w * temp_boost, 0.01);
+    // Disk density envelope
+    let disk_h = abs(np.y);
+    let thickness = 0.01 + 0.06 * pow(nr / (params.isco * 5.0), 1.5);
+    let envelope = exp(-disk_h * disk_h / (thickness * thickness * nr * nr + 0.001));
+    let age_fade = smoothstep(60.0, 40.0, p.pos.w);
+    let inner_glow = smoothstep(params.isco * 5.0, params.isco, nr);
 
-    // Time dilation: dt_proper/dt_coord = sqrt(1 - rs/r) for Schwarzschild
-    let time_dilation = sqrt(max(1.0 - rs / new_r, 0.001));
+    let alpha = envelope * age_fade * spiral * spiral2 * (0.2 + inner_glow * 0.8);
 
-    // Volumetric alpha with turbulence
-    let disk_height = abs(new_pos.y);
-    let disk_thickness = 0.08 + 0.25 * sqrt(new_r / (params.isco * 4.0));
-    let disk_alpha = exp(-disk_height * disk_height / (disk_thickness * disk_thickness * new_r * new_r + 0.01));
-    let age_alpha = smoothstep(50.0, 35.0, p.pos.w);
-    let inner_boost = smoothstep(params.isco * 5.0, params.isco, new_r);
-
-    p.meta = vec4<f32>(
-      new_r,
-      redshift,
-      doppler,
-      disk_alpha * age_alpha * (0.3 + inner_boost * 0.7),
-    );
-    p.extra.y = time_dilation;
+    p.meta = vec4(nr, redshift, doppler, alpha);
+    p.extra.y = td;
   } else {
-    // --- Jet particle physics ---
-    let pole_dir = sign(p.pos.y);
-
-    // Jet acceleration along polar axis with magnetic collimation
+    // --- Jet ---
+    let pole = sign(p.pos.y);
     let height = abs(p.pos.y);
-    let lateral_dist = length(p.pos.xz);
+    let lat = length(p.pos.xz);
 
-    // Magnetic collimation — push particles towards axis
-    let collimation = -normalize(vec3<f32>(p.pos.x, 0.0, p.pos.z)) * 0.02 / (lateral_dist + 0.5);
+    // Magnetic collimation + acceleration
+    let collimate = -normalize(vec3(p.pos.x, 0.0, p.pos.z)) * 0.03 / (lat + 0.3);
+    let boost = vec3(0.0, pole * 0.2 / (height + 0.5), 0.0);
 
-    // Continued acceleration along jet axis
-    let jet_accel = vec3<f32>(0.0, pole_dir * 0.15 / (height + 1.0), 0.0);
-
-    // Precession from spin
-    let prec_angle = params.time * a_spin * 0.3;
-    let precession = vec3<f32>(
-      sin(prec_angle) * 0.005,
+    // Helical twist from BH spin
+    let twist_rate = a * 0.5 / (height + 1.0);
+    let twist = vec3(
+      -sin(params.time * twist_rate + height * 0.3) * 0.01,
       0.0,
-      cos(prec_angle) * 0.005,
+      cos(params.time * twist_rate + height * 0.3) * 0.01,
     );
 
-    let new_vel = p.vel.xyz + (jet_accel + collimation + precession) * dt;
-    let new_pos = p.pos.xyz + new_vel * dt;
+    let nv = p.vel.xyz + (boost + collimate + twist) * dt;
+    let np = p.pos.xyz + nv * dt;
+    p.pos = vec4(np, p.pos.w + dt);
+    p.vel = vec4(nv, p.vel.w * 0.9985);
 
-    p.pos = vec4<f32>(new_pos, p.pos.w + dt);
-    p.vel = vec4<f32>(new_vel, p.vel.w * 0.999); // slow cooling
-
-    let new_r = length(new_pos);
-    let speed = length(new_vel);
-
-    // Relativistic beaming — jet brightness depends on viewing angle
-    let beam_factor = 1.0 / max(1.0 - speed * 0.5, 0.1);
-
-    // Time dilation from velocity (special relativistic)
+    let speed = length(nv);
+    let beam = 1.0 / max(1.0 - speed * 0.6, 0.05);
     let lorentz = 1.0 / sqrt(max(1.0 - speed * speed, 0.01));
-    let time_dilation = 1.0 / lorentz;
 
-    // Jet alpha: bright core, fading with distance
-    let core_alpha = exp(-lateral_dist * lateral_dist * 8.0);
-    let height_fade = exp(-height * 0.04);
-    let age_fade = smoothstep(50.0, 40.0, p.pos.w);
+    let core = exp(-lat * lat * 12.0);
+    let h_fade = exp(-height * 0.03);
+    let age = smoothstep(60.0, 45.0, p.pos.w);
 
-    p.meta = vec4<f32>(
-      new_r,
-      beam_factor,
-      speed,
-      core_alpha * height_fade * age_fade * 0.6,
-    );
-    p.extra.y = time_dilation;
+    p.meta = vec4(length(np), beam, speed, core * h_fade * age * 0.7);
+    p.extra.y = 1.0 / lorentz;
   }
 
   particles[idx] = p;
